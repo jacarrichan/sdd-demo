@@ -1,0 +1,6 @@
+name: spring-boot-hello-world
+description: 实现一个 Spring Boot Hello World demo 并运行起来
+author: user
+created_at: 2026-06-28
+capabilities:
+  - spring-boot-app

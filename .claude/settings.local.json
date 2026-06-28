@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(export COMET_STATE=\"C:/Users/jacarrichan/.claude/skills/comet/scripts/comet-state.sh\")",
+      "Bash(bash C:/Users/jacarrichan/.claude/skills/comet/scripts/comet-state.sh set spring-boot-hello-world phase build)",
+      "Bash(bash C:/Users/jacarrichan/.claude/skills/comet/scripts/comet-state.sh set spring-boot-hello-world design_doc docs/superpowers/specs/2026-06-28-spring-boot-hello-design.md)",
+      "Bash(bash C:/Users/jacarrichan/.claude/skills/comet/scripts/comet-state.sh set spring-boot-hello-world plan docs/superpowers/plans/2026-06-28-spring-boot-hello.md)",
+      "Bash(mvn clean *)",
+      "Bash(curl -s http://localhost:8080/hello)",
+      "Bash(curl *)",
+      "Bash(git init *)",
+      "Bash(git add *)"
+    ]
+  }
+}
