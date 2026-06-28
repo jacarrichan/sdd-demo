@@ -1,6 +1,6 @@
 # OpenSpec Skill 源码分析
 
-本文档分析 OpenSpec 相关的所有 Skill 源码，包括 `comet-open`、`comet-archive` 以及相关的 shell 脚本。
+本文档分析 OpenSpec 相关的 Skill 源码，包括 `openspec-explore`、`openspec-new-change`、`openspec-propose` 等。
 
 ---
 
@@ -8,865 +8,586 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                          OpenSpec 架构                              │
+│                        OpenSpec 系统架构                              │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
-│   ┌──────────────┐        ┌──────────────┐        ┌──────────────┐ │
-│   │   comet-open │───────▶│ comet-archive│◀───────│ comet-verify │ │
-│   │   (Phase 1)  │        │  (Phase 5)   │        │  (Phase 4)   │ │
-│   └──────────────┘        └──────────────┘        └──────────────┘ │
-│          │                          ▲                           │   │
-│          │                          │                           │   │
-│          ▼                          │                           │   │
-│   ┌──────────────┐                  │                           │   │
-│   │   .comet.yaml│                  │                           │   │
-│   │   状态管理   │──────────────────┘                           │   │
-│   └──────────────┘                                              │   │
-│          │                                                       │   │
-│          ▼                                                       │   │
-│   ┌─────────────────────────────────────────────────────────┐   │   │
-│   │              Shell 脚本层 (OpenSpec Tools)               │   │   │
-│   │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐       │   │   │
-│   │  │comet-state  │  │comet-archive│  │comet-guard  │       │   │   │
-│   │  │   .sh       │  │   .sh       │  │   .sh       │       │   │   │
-│   │  └─────────────┘  └─────────────┘  └─────────────┘       │   │   │
-│   └─────────────────────────────────────────────────────────┘   │   │
+│   ┌─────────────────────────────────────────────────────────────┐ │
+│   │                      OpenSpec Skills                         │ │
+│   │                                                              │ │
+│   │  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐   │ │
+│   │  │ openspec-    │───▶│ openspec-    │───▶│ openspec-    │   │ │
+│   │  │ explore      │    │ new-change   │    │ propose      │   │ │
+│   │  └──────────────┘    └──────────────┘    └──────────────┘   │ │
+│   │                                                              │ │
+│   │  ┌──────────────┐    ┌──────────────┐                      │ │
+│   │  │ openspec-    │    │ openspec-    │                      │ │
+│   │  │ verify-change│    │ list/status  │                      │ │
+│   │  └──────────────┘    └──────────────┘                      │ │
+│   │                                                              │ │
+│   └─────────────────────────────────────────────────────────────┘ │
+│                                                                     │
+│   ┌─────────────────────────────────────────────────────────────┐ │
+│   │                      核心数据结构                           │ │
+│   │                                                              │ │
+│   │  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐  │ │
+│   │  │ .openspec    │    │ change/      │    │ specs/       │  │ │
+│   │  │ .yaml        │    │              │    │              │  │ │
+│   │  │ (元数据)     │    │ (内容文件)   │    │ (能力规格)   │  │ │
+│   │  └──────────────┘    └──────────────┘    └──────────────┘  │ │
+│   │                                                              │ │
+│   └─────────────────────────────────────────────────────────────┘ │
 │                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 2. comet-open Skill 源码分析
+## 2. OpenSpec 核心概念
 
-### 2.1 文件位置
+### 2.1 什么是 OpenSpec
+
+OpenSpec 是一个**变更提案和需求管理系统**，关注 **WHAT**（做什么、为什么）：
+- 问题背景（Why）
+- 变更目标（What）
+- 范围界定（Scope）
+- 能力规格（Capability Spec）
+
+### 2.2 核心文件结构
+
 ```
-~/.claude/skills/comet-open/SKILL.md
+openspec/
+├── config.yaml                    # 全局配置
+├── changes/                       # 变更目录
+│   ├── <name>/                    # 活跃变更
+│   │   ├── .openspec.yaml        # 变更元数据
+│   │   ├── proposal.md           # 提案（Why + What）
+│   │   ├── design.md             # 高层设计
+│   │   ├── tasks.md              # 任务清单
+│   │   └── specs/                # Delta 能力规格
+│   │       └── <capability>/
+│   │           └── spec.md
+│   └── archive/                   # 归档目录
+│       └── YYYY-MM-DD-<name>/
+└── specs/                         # 主能力规格
+    └── <capability>/
+        └── spec.md
 ```
 
-### 2.2 核心功能
-**Phase 1: 开启** - 通过 OpenSpec 探索想法、创建 change 结构
+### 2.3 与 Superpowers 的区别
 
-### 2.3 工作流程源码解析
+| 维度 | OpenSpec | Superpowers |
+|------|----------|-------------|
+| **关注点** | WHAT（做什么） | HOW（怎么做） |
+| **核心问题** | Why + What | 技术实现细节 |
+| **主要产出** | proposal, design, spec | Design Doc, Plan, Code |
+| **目标读者** | PM、架构师、业务方 | 开发者 |
 
-```yaml
-# SKILL.md 结构
 ---
-name: comet-open
-description: "Comet 阶段 1：开启。用 /comet-open 调用。通过 OpenSpec 探索想法、创建 change 结构"
+
+## 3. openspec-explore Skill
+
+### 3.1 功能定位
+**探索问题空间** - 在创建正式变更前，自由探索和理解需求。
+
+### 3.2 典型工作流程
+
+```yaml
+入口: 用户提出模糊需求或问题
+
+流程:
+  1. 理解当前项目上下文
+     - 检查现有文件结构
+     - 阅读相关文档
+     - 了解技术栈
+
+  2. 询问澄清问题
+     - 一次一个问题
+     - 使用选择题或开放性问题
+     - 聚焦：目的、约束、成功标准
+
+  3. 探索可能的方案
+     - 提出 2-3 种不同方案
+     - 分析每种方案的权衡
+     - 给出推荐和理由
+
+  4. 形成建议
+     - 汇总发现
+     - 推荐下一步行动
+     - 可能建议创建正式 change
+
+出口: 形成明确的需求理解或变更建议
+```
+
+### 3.3 关键约束
+
+```yaml
+禁止:
+  - 直接开始实现
+  - 编写代码
+  - 创建文件（除非用于辅助理解）
+
+必须:
+  - 充分理解问题后再建议行动
+  - 与用户确认理解是否正确
+```
+
 ---
-```
 
-### 2.4 执行步骤详解
+## 4. openspec-new-change Skill
 
-#### Step 0: 入口状态验证 (Entry Check)
+### 4.1 功能定位
+**创建正式变更结构** - 初始化 change 目录和核心文件。
 
-```bash
-COMET_STATE="${COMET_STATE:-$(find . -path '*/comet/scripts/comet-state.sh' -type f -print -quit)}"
-bash "$COMET_STATE" check <name> open
-```
-
-**源码逻辑**:
-1. 动态查找 `comet-state.sh` 脚本位置
-2. 调用 `check` 子命令验证入口条件
-3. 验证项：
-   - `.comet.yaml` 不存在（新 change）
-   - `proposal.md` 非空
-   - `design.md` 非空
-   - `tasks.md` 非空
-
-#### Step 1: 探索想法
+### 4.2 创建的文件
 
 ```yaml
-立即执行: 使用 Skill 工具加载 `openspec-explore` 技能
-禁止跳过此步骤
-```
-
-**注意**: `openspec-explore` 是独立的 skill，未在当前仓库中找到源码。
-
-#### Step 2: 创建 Change 结构
-
-```yaml
-立即执行: 使用 Skill 工具加载 `openspec-new-change` 技能
-禁止跳过此步骤
-```
-
-**产出文件结构**:
-```
 openspec/changes/<name>/
-├── .openspec.yaml      # Change 元数据
-├── .comet.yaml         # Comet 状态追踪
-├── proposal.md         # Why + What：问题、目标、范围
-├── design.md           # How（高层）：架构决策、方案选型
-└── tasks.md            # 任务清单（勾选框）
+├── .openspec.yaml              # 变更元数据
+├── proposal.md                # 提案文档
+├── design.md                  # 高层设计
+└── tasks.md                   # 任务清单
 ```
 
-#### Step 3: 初始化 Comet 状态
-
-```bash
-bash "$COMET_STATE" init <name> full
-```
-
-**初始化逻辑** (来自 comet-state.sh):
-```bash
-case "$workflow" in
-  full)
-    phase="design"        # 完整流程从 design 开始
-    build_mode="null"
-    isolation="null"
-    verify_mode="null"
-    ;;
-  hotfix|tweak)
-    phase="build"         # 快速修复从 build 开始
-    build_mode="direct"
-    isolation="branch"
-    verify_mode="light"
-    ;;
-esac
-```
-
-**生成的 .comet.yaml**:
-```yaml
-workflow: full
-phase: design
-design_doc: null
-plan: null
-build_mode: null
-isolation: null
-verify_mode: null
-verify_result: pending
-verified_at: null
-archived: false
-```
-
-#### Step 4: 内容完整性检查
-
-验证三个文档内容完整：
-- **proposal.md**: 问题背景、目标、范围、非目标
-- **design.md**: 高层架构决策、方案选型、数据流
-- **tasks.md**: 任务列表，每个任务有明确描述
-
-### 2.5 退出条件
+### 4.3 .openspec.yaml 结构
 
 ```yaml
-- proposal.md、design.md、tasks.md 均已创建且内容完整
-- 阶段守卫: bash $COMET_GUARD <change-name> open
+name: spring-boot-hello-world
+description: 实现一个 Spring Boot Hello World demo
+author: user
+created_at: 2026-06-28
+capabilities:
+  - spring-boot-app
+status: active
 ```
 
-**guard 检查项** (来自 comet-guard.sh):
-```bash
-guard_open() {
-  check "proposal.md exists and non-empty"
-  check "design.md exists and non-empty"
-  check "tasks.md exists and non-empty"
-  check "tasks.md has at least one task"
-}
+### 4.4 proposal.md 模板
+
+```markdown
+# <Change Name>
+
+## 问题背景 (Why)
+- 当前面临的问题
+- 为什么需要这个变更
+- 不解决会有什么影响
+
+## 目标 (What)
+- 期望达成的具体目标
+- 可衡量的成功标准
+
+## 范围
+
+### 包含
+- 具体要做什么
+
+### 不包含
+- 明确排除的内容
+
+## 非目标
+- 不会涉及的方向
 ```
 
-### 2.6 自动流转
+### 4.5 design.md 模板
+
+```markdown
+# <Change Name> 设计
+
+## 架构决策
+- 技术选型
+- 方案概述
+
+## 项目结构
+```
+目录树...
+```
+
+## 数据流
+- 关键流程描述
+
+## API 设计
+| 端点 | 方法 | 描述 |
+```
+
+### 4.6 tasks.md 格式
+
+```markdown
+# 任务清单
+
+## Phase 1: Open
+- [x] 创建 change 目录
+- [x] 编写 proposal.md
+- [x] 编写 design.md
+
+## Phase 2: Design
+- [ ] 技术设计
+- [ ] API 规格定义
+
+## Phase 3: Build
+- [ ] 任务 1
+- [ ] 任务 2
+```
+
+---
+
+## 5. openspec-propose Skill
+
+### 5.1 功能定位
+**形成变更建议** - 当用户意图不明确时，帮助形成结构化提案。
+
+### 5.2 与 explore 的区别
+
+| openspec-explore | openspec-propose |
+|------------------|------------------|
+| 自由探索问题空间 | 结构化形成建议 |
+| 输出是理解 | 输出是提案草案 |
+| 可能不产生文件 | 产生 proposal.md 草案 |
+
+### 5.3 工作流程
 
 ```yaml
-退出后自动执行: comet-design skill
+入口: 用户有想法但不够清晰
+
+流程:
+  1. 询问关键问题
+     - 问题背景
+     - 期望结果
+     - 约束条件
+
+  2. 形成草案
+     - 基于回答编写 proposal.md 草案
+     - 包含初步的 design.md
+
+  3. 与用户确认
+     - 呈现草案
+     - 征求修改意见
+     - 迭代直到满意
+
+  4. 创建正式 change
+     - 调用 openspec-new-change
+     - 或引导用户确认
+
+出口: 形成可执行的变更提案
 ```
 
 ---
 
-## 3. comet-archive Skill 源码分析
+## 6. openspec-verify-change Skill
 
-### 3.1 文件位置
-```
-~/.claude/skills/comet-archive/SKILL.md
-```
+### 6.1 功能定位
+**验证变更符合规格** - 深度检查实现与设计的符合性。
 
-### 3.2 核心功能
-**Phase 5: 归档** - 同步 delta spec 到主 spec，归档 change
+### 6.2 触发条件
+- 由 Superpowers 系统在验证阶段调用
+- 当规模评估为"大"时触发
 
-### 3.3 前置条件
+### 6.3 检查项
 
 ```yaml
-- 验证已通过（阶段 4 完成）
-- 分支已处理
-- openspec/changes/<name>/.comet.yaml 中 verify_result: pass
+1. tasks.md 完整性
+   - 所有任务已完成 [x]
+   - 没有未完成的任务 [ ]
+
+2. proposal.md 符合性
+   - 目标已实现
+   - 范围已覆盖
+
+3. design.md 符合性
+   - 架构决策已遵循
+   - 技术选型一致
+
+4. 能力规格符合性
+   - delta spec 场景全部通过
+   - 验收条件满足
+
+5. Delta Spec 漂移检测
+   - 若 spec 有变更，design doc 是否体现
+   - 标注 Implementation Divergence（如有）
 ```
 
-### 3.4 执行步骤详解
-
-#### Step 0: 入口状态验证
-
-```bash
-bash "$COMET_STATE" check <name> archive
-```
-
-**检查项**:
-- `phase: archive`
-- `verify_result: pass`
-- `archived: false`
-
-#### Step 1: 执行归档
-
-```bash
-COMET_ARCHIVE="${COMET_ARCHIVE:-$(find . -path '*/comet/scripts/comet-archive.sh' -type f -print -quit)}"
-bash "$COMET_ARCHIVE" "<change-name>"
-```
-
-**comet-archive.sh 脚本执行流程**:
-
-##### 3.4.1 读取 .comet.yaml
-
-```bash
-yaml_field() {
-  local field="$1"
-  if [ -f "$STATE_SH" ]; then
-    bash "$STATE_SH" get "$CHANGE" "$field" 2>/dev/null
-  else
-    grep "^${field}:" "$YAML" | sed "s/^${field}: *//" | tr -d '"' | tr -d "'"
-  fi
-}
-
-DESIGN_DOC=$(yaml_field "design_doc")
-PLAN_PATH=$(yaml_field "plan")
-```
-
-##### 3.4.2 入口状态验证
-
-```bash
-PHASE_VAL=$(yaml_field "phase")
-VERIFY_VAL=$(yaml_field "verify_result")
-ARCHIVED_VAL=$(yaml_field "archived")
-
-if [ "$PHASE_VAL" != "archive" ]; then
-  exit 1
-fi
-if [ "$VERIFY_VAL" != "pass" ]; then
-  exit 1
-fi
-if [ "$ARCHIVED_VAL" = "true" ]; then
-  exit 1
-fi
-```
-
-##### 3.4.3 同步 Delta Spec → Main Spec
-
-```bash
-sync_delta_specs() {
-  local delta_root="$CHANGE_DIR/specs"
-  if [ ! -d "$delta_root" ]; then
-    return 0
-  fi
-
-  for delta_spec_dir in "$delta_root"/*/; do
-    capability=$(basename "$delta_spec_dir")
-    delta_spec="$delta_spec_dir/spec.md"
-    main_spec="openspec/specs/$capability/spec.md"
-
-    if [ ! -f "$main_spec" ]; then
-      mkdir -p "openspec/specs/$capability"
-    fi
-    cp "$delta_spec" "$main_spec"
-  done
-}
-```
-
-**核心逻辑**:
-1. 遍历 `changes/<name>/specs/<capability>/spec.md`
-2. 复制到 `openspec/specs/<capability>/spec.md`
-3. 如果不存在则创建目录
-
-##### 3.4.4 标注设计文档
-
-```bash
-annotate_frontmatter() {
-  local file="$1"
-  local extra_fields="$2"
-
-  if head -1 "$file" | grep -q '^---'; then
-    # 已有 frontmatter，添加 archived-with
-    awk -v archive="$ARCHIVE_NAME" '
-      /^archived-with:/ { next }
-      NR==1 && /^---/ { print; next }
-      /^---/ && NR>1 {
-        print "archived-with: " archive
-        print; next
-      }
-      { print }
-    '
-  else
-    # 没有 frontmatter，创建新的
-    {
-      echo "---"
-      echo "archived-with: $ARCHIVE_NAME"
-      echo "status: final"
-      echo "---"
-      cat "$file"
-    }
-  fi
-}
-```
-
-##### 3.4.5 移动 Change 到归档目录
-
-```bash
-TODAY=$(date +%Y-%m-%d)
-ARCHIVE_NAME="${TODAY}-${CHANGE}"
-ARCHIVE_DIR="openspec/changes/archive/${ARCHIVE_NAME}"
-
-mkdir -p "openspec/changes/archive"
-mv "$CHANGE_DIR" "$ARCHIVE_DIR"
-```
-
-##### 3.4.6 更新 archived: true
-
-```bash
-ARCHIVE_YAML="$ARCHIVE_DIR/.comet.yaml"
-sed -i 's/^archived:.*/archived: true/' "$ARCHIVE_YAML"
-```
-
-### 3.5 生命周期闭环
-
-```
-brainstorming → delta spec → 实施 → 验证 → 主 spec 覆盖 → design doc 标注 → 归档
-```
-
----
-
-## 4. Shell 脚本层深度分析
-
-### 4.1 comet-state.sh - 状态管理器
-
-#### 4.1.1 整体架构
-
-```bash
-#!/bin/bash
-# Comet State — unified interface for .comet.yaml state management
-
-# 子命令分发
-case "$SUBCOMMAND" in
-  init)  cmd_init "$@" ;;
-  get)   cmd_get "$@" ;;
-  set)   cmd_set "$@" ;;
-  check) cmd_check "$@" ;;
-  scale) cmd_scale "$@" ;;
-esac
-```
-
-#### 4.1.2 cmd_init - 初始化
-
-```bash
-cmd_init() {
-  local change_name="$1"
-  local workflow="$2"
-
-  # 验证输入
-  validate_change_name "$change_name"
-  validate_enum "$workflow" "full" "hotfix" "tweak"
-
-  # 检查是否已存在
-  if [ -f "$yaml_file" ]; then
-    exit 1
-  fi
-
-  # 根据 workflow 设置默认值
-  case "$workflow" in
-    full)
-      phase="design"
-      build_mode="null"
-      isolation="null"
-      verify_mode="null"
-      ;;
-    hotfix|tweak)
-      phase="build"
-      build_mode="direct"
-      isolation="branch"
-      verify_mode="light"
-      ;;
-  esac
-
-  # 写入文件
-  cat > "$yaml_file" <<EOF
-workflow: $workflow
-phase: $phase
-build_mode: $build_mode
-isolation: $isolation
-verify_mode: $verify_mode
-design_doc: null
-plan: null
-verify_result: pending
-verified_at: null
-archived: false
-EOF
-}
-```
-
-#### 4.1.3 cmd_get / cmd_set - 读写字段
-
-```bash
-# 读取字段
-yaml_field() {
-  local field="$1"
-  local yaml_file="$2"
-  grep "^${field}:" "$yaml_file" | sed "s/^${field}: *//" | tr -d '"' | tr -d "'"
-}
-
-# 设置字段
-cmd_set() {
-  if grep -q "^${field}:" "$yaml_file"; then
-    # 字段存在，替换
-    sed -i "s/^${field}:.*/${field}: ${value}/" "$yaml_file"
-  else
-    # 字段不存在，追加
-    echo "${field}: ${value}" >> "$yaml_file"
-  fi
-}
-```
-
-#### 4.1.4 cmd_check - 阶段入口验证
-
-```bash
-cmd_check() {
-  local phase="$1"
-  local change_name="$2"
-
-  case "$phase" in
-    open)
-      check_file_not_exists ".comet.yaml" "$yaml_file"
-      check_nonempty "proposal.md" "$proposal_file"
-      check_nonempty "design.md" "$design_file"
-      check_nonempty "tasks.md" "$tasks_file"
-      ;;
-    design)
-      check_yaml_is "phase" "design"
-      check_yaml_is "workflow" "full"
-      check_yaml_empty "design_doc"
-      ;;
-    build)
-      check_yaml_is "phase" "build"
-      check_design_doc_exists
-      ;;
-    verify)
-      check_yaml_is "phase" "verify"
-      check_verify_result_pending
-      ;;
-    archive)
-      check_yaml_is "phase" "archive"
-      check_yaml_is "verify_result" "pass"
-      check_archived_not_true
-      ;;
-  esac
-}
-```
-
-#### 4.1.5 cmd_scale - 规模评估
-
-```bash
-cmd_scale() {
-  # 读取指标
-  # 1. 任务数
-  task_count=$(grep -c '^\- \[' "$tasks_file")
-
-  # 2. Delta spec 数
-  delta_spec_count=$(find "$change_dir/specs" -name "spec.md" | wc -l)
-
-  # 3. 变更文件数
-  changed_files=$(git diff --stat HEAD | tail -1 | grep -o '[0-9]\+ file')
-
-  # 决策规则
-  if [ "$task_count" -gt 3 ] || [ "$delta_spec_count" -gt 1 ] || [ "$changed_files" -gt 5 ]; then
-    result="full"
-  else
-    result="light"
-  fi
-
-  # 更新 verify_mode
-  sed -i "s/^verify_mode:.*/verify_mode: $result/" "$yaml_file"
-}
-```
-
----
-
-### 4.2 comet-guard.sh - 阶段守卫
-
-#### 4.2.1 核心机制
-
-```bash
-# 阶段检查映射
-case "$PHASE" in
-  open)     preflight "design";  guard_open ;;
-  design)   preflight "build";   guard_design ;;
-  build)    preflight "verify";  guard_build ;;
-  verify)   preflight "archive"; guard_verify ;;
-  archive)  preflight "archive"; guard_archive ;;
-esac
-```
-
-#### 4.2.2 preflight - 预检
-
-```bash
-preflight() {
-  local expected_phase="$1"
-
-  # 检查目录存在
-  if [ ! -d "$CHANGE_DIR" ]; then
-    exit 1
-  fi
-
-  # 检查 .comet.yaml 存在
-  if [ ! -f "$CHANGE_DIR/.comet.yaml" ]; then
-    exit 1
-  fi
-
-  # 验证 phase 字段
-  actual_phase=$(yaml_field_value "phase")
-  if [ "$actual_phase" != "$expected_phase" ]; then
-    exit 1
-  fi
-
-  # Schema 验证
-  bash "$validate_script" "$CHANGE"
-}
-```
-
-#### 4.2.3 各阶段守卫检查
-
-```bash
-guard_open() {
-  check "proposal.md exists and non-empty"
-  check "design.md exists and non-empty"
-  check "tasks.md exists and non-empty"
-  check "tasks.md has at least one task"
-}
-
-guard_design() {
-  check "proposal.md exists"
-  check "tasks.md exists"
-  check "Design Doc exists"  # 如果有 design_doc 字段
-}
-
-guard_build() {
-  check "tasks.md all tasks checked"
-  check "Maven compile passes"  # 或对应语言的构建命令
-}
-
-guard_verify() {
-  check "verify_result is pass"
-  check "tasks.md all tasks checked"
-}
-
-guard_archive() {
-  check "archived is true"
-  check "tasks.md all tasks checked"
-}
-```
-
-#### 4.2.4 自动状态更新 (--apply)
-
-```bash
-apply_state_update() {
-  local p="$1"
-
-  case "$p" in
-    open)
-      bash "$state_sh" set "$CHANGE" phase design
-      ;;
-    design)
-      bash "$state_sh" set "$CHANGE" phase build
-      ;;
-    build)
-      bash "$state_sh" set "$CHANGE" phase verify
-      bash "$state_sh" set "$CHANGE" verify_result pending
-      ;;
-    verify)
-      bash "$state_sh" set "$CHANGE" phase archive
-      bash "$state_sh" set "$CHANGE" verify_result pass
-      bash "$state_sh" set "$CHANGE" verified_at "$(date +%Y-%m-%d)"
-      ;;
-  esac
-}
-```
-
----
-
-### 4.3 comet-yaml-validate.sh - 配置验证器
-
-#### 4.3.1 验证流程
-
-```bash
-validate_change_name "$1"
-
-CHANGE="$1"
-YAML="openspec/changes/$CHANGE/.comet.yaml"
-
-ERRORS=0
-WARNINGS=0
-```
-
-#### 4.3.2 必需字段检查
-
-```bash
-REQUIRED_FIELDS="workflow phase design_doc plan build_mode isolation verify_mode verify_result verified_at archived"
-
-for field in $REQUIRED_FIELDS; do
-  if ! grep -q "^${field}:" "$YAML"; then
-    fail "missing required field '$field'"
-  fi
-done
-```
-
-#### 4.3.3 枚举值验证
-
-```bash
-validate_enum() {
-  local field="$1" value="$2"
-  shift 2
-  local valid_values="$*"
-
-  # null 或空值始终接受
-  if [ -z "$value" ] || [ "$value" = "null" ]; then
-    return 0
-  fi
-
-  for v in $valid_values; do
-    if [ "$value" = "$v" ]; then
-      return 0
-    fi
-  done
-  fail "$field='$value' is not valid"
-}
-
-# 验证各字段
-validate_enum "workflow"      "$workflow"      "full hotfix tweak"
-validate_enum "phase"         "$phase"          "design build verify archive"
-validate_enum "build_mode"    "$build_mode"     "subagent-driven-development executing-plans direct"
-validate_enum "isolation"     "$isolation"      "branch worktree"
-validate_enum "verify_mode"   "$verify_mode"    "light full"
-validate_enum "verify_result" "$verify_result"  "pending pass fail"
-validate_enum "archived"      "$archived"       "true false"
-```
-
-#### 4.3.4 路径验证
-
-```bash
-if [ -n "$design_doc" ] && [ "$design_doc" != "null" ]; then
-  if [ ! -f "$design_doc" ]; then
-    fail "design_doc='$design_doc' does not exist"
-  fi
-fi
-
-if [ -n "$plan" ] && [ "$plan" != "null" ]; then
-  if [ ! -f "$plan" ]; then
-    fail "plan='$plan' does not exist"
-  fi
-fi
-```
-
----
-
-## 5. OpenSpec 数据流分析
-
-### 5.1 状态流转图
-
-```
-┌────────────────────────────────────────────────────────────────────────┐
-│                         OpenSpec 状态流转                              │
-├────────────────────────────────────────────────────────────────────────┤
-│                                                                        │
-│   ┌─────────┐                                                          │
-│   │  Init   │                                                          │
-│   │ (null)  │                                                          │
-│   └────┬────┘                                                          │
-│        │                                                               │
-│        ▼                                                               │
-│   ┌─────────┐     comet-state init      ┌─────────┐                   │
-│   │  Open   │ ────────────────────────▶│  Phase  │                   │
-│   │ (文件)  │                          │  design │                   │
-│   └────┬────┘                          │(hotfix: │                   │
-│        │                               │ build)  │                   │
-│        │                               └────┬────┘                   │
-│        │                                     │                         │
-│        │        ┌────────────────────────────┘                         │
-│        │        │                                                      │
-│        │        ▼                                                      │
-│        │   ┌─────────┐    comet-guard design --apply                  │
-│        │   │ Design  │ ───────────────────────────────────▶           │
-│        │   │(yaml)   │                                               │
-│        │   └────┬────┘                                               │
-│        │        │                                                     │
-│        │        ▼                                                     │
-│        │   ┌─────────┐    comet-guard build --apply                   │
-│        │   │  Build  │ ───────────────────────────────────▶           │
-│        │   │(yaml)   │                                               │
-│        │   └────┬────┘                                               │
-│        │        │                                                     │
-│        │        ▼                                                     │
-│        │   ┌─────────┐    comet-guard verify --apply                  │
-│        │   │ Verify  │ ───────────────────────────────────▶           │
-│        │   │(yaml)   │    verify_result: pass                         │
-│        │   └────┬────┘    verified_at: YYYY-MM-DD                    │
-│        │        │                                                     │
-│        │        ▼                                                     │
-│        │   ┌─────────┐    comet-archive.sh                            │
-│        │   │ Archive │ ───────────────────────────────────▶           │
-│        │   │(yaml)   │    archived: true                                │
-│        │   └────┬────┘    移动到 archive/                             │
-│        │        │                                                     │
-│        │        ▼                                                     │
-│        │   ┌─────────┐                                                │
-│        └──▶│  Done   │                                                │
-│            │(归档)   │                                                │
-│            └─────────┘                                                │
-│                                                                        │
-└────────────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## 6. 关键设计模式
-
-### 6.1 状态机模式
+### 6.4 输出格式
 
 ```yaml
-# .comet.yaml 是一个有限状态机
-phase: design → build → verify → archive
+验证报告:
+  检查项:
+    - [✓] tasks.md 完整性
+    - [✓] proposal 目标满足
+    - [✓] design 架构遵循
+    - [✗] spec 场景覆盖 (3/5 通过)
+    - [✓] 无 spec 漂移
 
-# 状态转换由 guard 控制
-# 每个状态有明确的进入/退出条件
+  发现:
+    - 问题 1: 描述
+    - 建议: 行动
+
+  结论: PASS / FAIL / CONDITIONAL PASS
 ```
 
-### 6.2 命令模式
+---
+
+## 7. OpenSpec 工具命令
+
+### 7.1 openspec list
 
 ```bash
-# comet-state.sh 使用命令模式
-bash comet-state.sh <command> <args>
+# 列出所有活跃 changes
+openspec list
 
-commands:
-  - init: 创建状态
-  - get: 读取字段
-  - set: 更新字段
-  - check: 验证入口
-  - scale: 评估规模
+# JSON 格式输出
+openspec list --json
+
+# 输出示例:
+[
+  {
+    "name": "spring-boot-hello-world",
+    "status": "active",
+    "created_at": "2026-06-28",
+    "capabilities": ["spring-boot-app"]
+  }
+]
 ```
 
-### 6.3 策略模式
+### 7.2 openspec status
+
+```bash
+# 查看 change 状态
+openspec status --change <name>
+
+# JSON 格式
+openspec status --change <name> --json
+
+# 输出示例:
+{
+  "name": "spring-boot-hello-world",
+  "phase": "build",
+  "progress": "3/5 tasks completed",
+  "files": {
+    "proposal": true,
+    "design": true,
+    "tasks": true,
+    "specs": 2
+  }
+}
+```
+
+### 7.3 openspec archive
+
+```bash
+# 归档 change（通常由工具自动调用）
+openspec archive <name>
+
+# 效果:
+# 1. 移动 changes/<name>/ 到 changes/archive/YYYY-MM-DD-<name>/
+# 2. 更新 status: archived
+# 3. 同步 delta specs 到主 specs/
+```
+
+---
+
+## 8. Delta Spec 机制
+
+### 8.1 什么是 Delta Spec
+
+Delta Spec 是在变更期间维护的**增量能力规格**，记录相对于主 spec 的变更。
+
+### 8.2 结构
+
+```markdown
+# <Capability Name> Delta Spec
+
+## NEW Requirements
+新增的需求
+
+## MODIFIED Requirements
+修改的需求（仅 hotfix）
+
+## REMOVED Requirements
+移除的需求（如有）
+
+## Acceptance Criteria
+- [ ] 场景 1
+- [ ] 场景 2
+```
+
+### 8.3 生命周期
+
+```
+创建 (openspec-new-change)
+    ↓
+更新 (设计/构建阶段)
+    ↓
+验证 (openspec-verify-change)
+    ↓
+归档 (openspec archive)
+    ↓
+    ├─ 复制到 openspec/specs/<capability>/spec.md
+    └─ 标注主 spec 版本
+```
+
+### 8.4 与主 Spec 的关系
+
+```
+openspec/specs/auth/spec.md          # 主 spec（长期维护）
+    ↑
+    │ 归档时复制
+    │
+openspec/changes/<name>/specs/auth/spec.md   # delta spec（临时）
+```
+
+---
+
+## 9. OpenSpec 状态流转
+
+### 9.1 Change 生命周期
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      Change 生命周期                            │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  ┌─────────┐                                                   │
+│  │  Draft  │  草稿状态                                         │
+│  └────┬────┘                                                   │
+│       │  openspec-new-change                                    │
+│       ▼                                                         │
+│  ┌─────────┐                                                   │
+│  │ Active  │  活跃状态（可被引用）                              │
+│  └────┬────┘                                                   │
+│       │  实施中                                                 │
+│       ▼                                                         │
+│  ┌─────────┐                                                   │
+│  │Completed│  实施完成，待验证                                  │
+│  └────┬────┘                                                   │
+│       │  验证通过                                               │
+│       ▼                                                         │
+│  ┌─────────┐                                                   │
+│  │Archived │  已归档（delta spec 已合并到主 spec）             │
+│  └─────────┘                                                   │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 9.2 状态字段
 
 ```yaml
-# workflow 字段决定策略
-workflow: full     # 完整流程 (5阶段)
-workflow: hotfix   # 热修复 (跳过 brainstorming)
-workflow: tweak    # 小调整 (跳过 brainstorming + plan)
-```
+# .openspec.yaml
+status: draft | active | completed | archived
 
-### 6.4 守卫模式
-
-```bash
-# comet-guard.sh 实现守卫模式
-# 阶段转换必须通过守卫检查
-bash comet-guard.sh <change> <phase> [--apply]
-
-# --apply 自动应用状态更新
+# 或更详细
+status:
+  state: active
+  phase: design  # 可选，与外部流程关联
+  progress: 3/5
 ```
 
 ---
 
-## 7. OpenSpec vs Superpowers 接口
+## 10. 与其他系统的协作
 
-### 7.1 OpenSpec 产出
+### 10.1 与 Superpowers 的接口
 
-| 文件 | 内容 | Superpowers 使用 |
-|------|------|------------------|
-| proposal.md | Why + What | Design Doc 的需求来源 |
-| design.md (高层) | 架构决策 | Design Doc 的设计基础 |
-| .comet.yaml | 状态追踪 | 关联 Design Doc 和 Plan |
+```yaml
+OpenSpec 产出 → Superpowers 输入:
 
-### 7.2 协作流程
+proposal.md:
+  - 目标描述 → Design Doc 的需求来源
+  - 范围界定 → Plan 的任务边界
+  
+design.md:
+  - 高层架构 → Design Doc 的设计基础
+  - API 概览 → Design Doc 的初始输入
 
-```
-OpenSpec                    Superpowers
-────────────────────────────────────────────────
-proposal.md ──────────────▶ Design Doc
-                             (需求输入)
+tasks.md:
+  - 任务列表 → Plan 的任务来源
+  - checkbox → 进度追踪
 
-design.md ───────────────▶ Design Doc
-                             (设计细化)
-
-.comet.yaml ─────────────▶ Plan 文件头
-  design_doc: <path>         (change: <name>)
-  plan: <path>               (design-doc: <path>)
+delta specs:
+  - 能力规格 → Design Doc 的验收标准来源
 ```
 
----
+### 10.2 与 Comet 的集成
 
-## 8. 扩展点分析
+```yaml
+Comet 调用 OpenSpec Skills:
+  Phase 1 (Open):
+    - 调用 openspec-explore（可选）
+    - 调用 openspec-new-change
+    - 或调用 openspec-propose
 
-### 8.1 新增 Workflow 类型
+  Phase 4 (Verify):
+    - 调用 openspec-verify-change（完整验证时）
 
-在 `comet-state.sh` 的 `cmd_init` 中添加：
-
-```bash
-case "$workflow" in
-  full|hotfix|tweak)
-    # 现有逻辑
-    ;;
-  new-workflow)
-    phase="custom"
-    build_mode="..."
-    ;;
-esac
-```
-
-### 8.2 新增 Phase
-
-在 `comet-guard.sh` 中添加：
-
-```bash
-case "$PHASE" in
-  # 现有阶段
-  new-phase)
-    preflight "next-phase"
-    guard_new_phase
-    ;;
-esac
-```
-
-### 8.3 新增验证规则
-
-在 `comet-yaml-validate.sh` 中添加：
-
-```bash
-# 新增字段
-NEW_FIELDS="new_field"
-REQUIRED_FIELDS="... $NEW_FIELDS"
-
-# 新增枚举
-validate_enum "new_field" "$new_field" "value1 value2"
+  Phase 5 (Archive):
+    - 调用 openspec archive（内部命令）
 ```
 
 ---
 
-## 9. 总结
+## 11. 扩展机制
 
-### 9.1 OpenSpec 核心职责
+### 11.1 自定义字段
 
-1. **Change 生命周期管理** - 从创建到归档的完整流程
-2. **状态追踪** - .comet.yaml 作为单一事实来源
-3. **准入准出控制** - guard 脚本确保质量门槛
-4. **规格同步** - delta spec 归档时合并到 main spec
+```yaml
+# .openspec.yaml 可扩展字段
+name: my-change
+custom:
+  priority: high
+  estimated_effort: 3d
+  stakeholders:
+    - team-a
+    - team-b
+```
 
-### 9.2 关键源码文件
+### 11.2 自定义验证规则
 
-| 文件 | 职责 | 核心函数 |
-|------|------|----------|
-| comet-state.sh | 状态管理 | init, get, set, check, scale |
-| comet-guard.sh | 阶段守卫 | guard_open, guard_design, guard_build, guard_verify, guard_archive |
-| comet-archive.sh | 归档流程 | sync_delta_specs, annotate_frontmatter |
-| comet-yaml-validate.sh | 配置验证 | validate_enum, validate_path |
+```yaml
+# config.yaml
+validation:
+  required_fields:
+    - name
+    - description
+    - priority
+  custom_rules:
+    - name: priority_check
+      condition: priority in [low, medium, high]
+```
 
-### 9.3 设计理念
+### 11.3 钩子机制
 
-- **显式优于隐式** - 所有状态变更必须通过脚本
-- **守卫模式** - 阶段转换必须通过验证
-- **可扩展** - 通过 workflow 和枚举值支持扩展
-- **双轨归档** - OpenSpec 归档到 archive/，Superpowers 标注 archived-with
+```yaml
+# config.yaml
+hooks:
+  on_create: scripts/on-create.sh
+  on_archive: scripts/on-archive.sh
+```
+
+---
+
+## 12. 总结
+
+### 12.1 OpenSpec 核心职责
+
+1. **需求捕获** - 通过 explore/propose 理解问题
+2. **变更结构化** - 通过 new-change 创建标准结构
+3. **规格管理** - 通过 delta spec 跟踪能力变更
+4. **符合性验证** - 通过 verify-change 确保实现符合设计
+5. **生命周期管理** - 从创建到归档的完整流程
+
+### 12.2 关键 Skill
+
+| Skill | 职责 | 触发时机 |
+|-------|------|----------|
+| openspec-explore | 探索问题空间 | 需求不明确时 |
+| openspec-new-change | 创建变更结构 | 需求明确时 |
+| openspec-propose | 形成变更建议 | 需要结构化提案时 |
+| openspec-verify-change | 验证符合性 | 验证阶段 |
+
+### 12.3 设计理念
+
+- **What 先于 How** - 先明确做什么，再考虑怎么做
+- **活文档** - Delta spec 可在实施中更新
+- **显式状态** - 变更状态明确可追踪
+- **规格驱动** - 能力规格是验收的核心依据
 
 ---
 
 **生成日期**: 2026-06-28  
-**分析版本**: v1.0.0
+**文档版本**: v1.0.0
